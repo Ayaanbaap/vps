@@ -39,7 +39,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y tmate curl unzip sudo net-tools neofetch
+          sudo apt install -y curl unzip sudo net-tools neofetch
 
       # 5. Install Tailscale
       - name: Install Tailscale
@@ -63,15 +63,11 @@ jobs:
             echo "ℹ️ Wings not installed yet"
           fi
 
-      # 8. Start tmate for remote access
-      - name: Start tmate session
-        uses: mxschmitt/action-tmate@v3
-
-      # 9. Keep VPS alive for 6 hours
+      # 8. Keep VPS alive for 6 hours
       - name: Sleep to keep VPS alive
         run: sleep 21600
 
-      # 10. Backup VPS before shutdown
+      # 9. Backup VPS before shutdown
       - name: Backup VPS
         run: |
           sudo tar --exclude=/proc --exclude=/sys --exclude=/dev \
@@ -81,7 +77,7 @@ jobs:
           split -b 2000M backup.tar.gz "backup.tar.gz.part"
           rm -f backup.tar.gz
 
-      # 11. Upload backup artifact
+      # 10. Upload backup artifact
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
