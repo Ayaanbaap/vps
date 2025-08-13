@@ -1,92 +1,89 @@
 name: Continuous Persistent VPS
- 
+
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
+    - cron: '0 */6 * * *' # Every 6 hours
   workflow_dispatch:
- 
+
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # Just under 6 hours
- 
+    timeout-minutes: 350 # Just under 6 hours
+
     steps:
+      # 1. Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
- 
-      - name: Set hostname to biralo
-        run: sudo hostnamectl set-hostname biralo
- 
+
+      # 2. Download last backup
       - name: Download VPS backup (if any)
         uses: actions/download-artifact@v4
         with:
           name: vps-backup
           path: ./backup
         continue-on-error: true
- 
+
+      # 3. Restore full system from backup
+      - name: Restore VPS from backup
+        run: |
+          if [ -f ./backup/backup.tar.gz.partaa ]; then
+            cat ./backup/backup.tar.gz.parta* > backup.tar.gz
+            sudo tar --numeric-owner -xpf backup.tar.gz -C /
+            echo "✅ VPS restored from backup"
+            rm -f backup.tar.gz ./backup/backup.tar.gz.parta*
+          else
+            echo "ℹ️ No previous backup found, starting fresh"
+          fi
+
+      # 4. Install prerequisites
       - name: Install prerequisites
         run: |
           sudo apt update
           sudo apt install -y tmate curl unzip sudo net-tools neofetch
- 
-      - name: Install Tailscale official script
+
+      # 5. Install Tailscale
+      - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
- 
-      - name: Restore backup files
-        run: |
-          if [ -f ./backup/backup.zip ]; then
-            unzip -o ./backup/backup.zip -d /
-          else
-            echo "No backup found, starting fresh"
-          fi
- 
-      - name: Restore Tailscale state
-        run: |
-          if [ -f /opt/vps-backup/data/tailscaled.state ]; then
-            sudo mkdir -p /var/lib/tailscale
-            sudo cp /opt/vps-backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
-            sudo chmod 600 /var/lib/tailscale/tailscaled.state
-          fi
- 
+
+      # 6. Start Tailscale with fixed hostname
       - name: Start Tailscale
         run: |
           sudo tailscaled &
           sleep 8
-          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=biralo || echo "Tailscale already up"
- 
-      - name: Create user biralo with sudo
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=Nubilux-1 || echo "Tailscale already up"
+
+      # 7. Restart Wings (if exists)
+      - name: Restart Wings service
         run: |
-          if ! id -u biralo >/dev/null 2>&1; then
-            sudo useradd -m -s /bin/bash biralo
-            echo "biralo:biralo" | sudo chpasswd
-            sudo usermod -aG sudo biralo
-            echo "biralo ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/biralo
+          if sudo systemctl list-units --type=service | grep -q wings.service; then
+            sudo systemctl restart wings.service
+            echo "✅ Wings restarted"
+          else
+            echo "ℹ️ Wings not installed yet"
           fi
- 
-      - name: Start tmate session for SSH access
+
+      # 8. Start tmate for remote access
+      - name: Start tmate session
         uses: mxschmitt/action-tmate@v3
- 
-      - name: Show Tailscale IP and tmate info
-        run: |
-          echo "🔗 Tailscale IP:"
-          tailscale ip -4 || echo "Tailscale IP not found"
-          echo ""
-          echo "🔑 tmate SSH session:"
-          cat $HOME/.tmate.sock/ssh
- 
+
+      # 9. Keep VPS alive for 6 hours
       - name: Sleep to keep VPS alive
-        run: sleep 21600  # 6 hours
- 
-      - name: Backup VPS data and tailscale state
+        run: sleep 21600
+
+      # 10. Backup VPS before shutdown
+      - name: Backup VPS
         run: |
-          sudo mkdir -p /opt/vps-backup/data
-          sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
-          sudo chown -R $USER:$USER /opt/vps-backup
-          zip -r backup.zip /opt/vps-backup
- 
+          sudo tar --exclude=/proc --exclude=/sys --exclude=/dev \
+                   --exclude=/tmp --exclude=/run --exclude=/mnt \
+                   --exclude=/media --exclude=/lost+found \
+                   --numeric-owner -cpzf backup.tar.gz /
+          split -b 2000M backup.tar.gz "backup.tar.gz.part"
+          rm -f backup.tar.gz
+
+      # 11. Upload backup artifact
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
           name: vps-backup
-          path: backup.zip
+          path: backup.tar.gz.part*
