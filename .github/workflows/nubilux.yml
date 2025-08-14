@@ -8,15 +8,15 @@ on:
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 350 # Just under 6 hours
 
     steps:
       # 1. Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 2. Download last backup (if exists)
-      - name: Download VPS backup
+      # 2. Download last backup
+      - name: Download VPS backup (if any)
         uses: actions/download-artifact@v4
         with:
           name: vps-backup
@@ -32,8 +32,17 @@ jobs:
             echo "✅ VPS restored from backup"
             rm -f backup.tar.gz ./backup/backup.tar*
           else
-            echo "ℹ️ No backup found, starting fresh"
+            echo "ℹ️ No previous backup found, starting fresh"
           fi
+
+          # Always set root password
+          echo "root:root" | sudo chpasswd
+
+          # Always create 'biralo' user
+          if ! id "biralo" &>/dev/null; then
+              sudo useradd -m -s /bin/bash biralo
+          fi
+          echo "biralo:biralo" | sudo chpasswd
 
       # 4. Install prerequisites
       - name: Install prerequisites
@@ -41,24 +50,19 @@ jobs:
           sudo apt update
           sudo apt install -y curl unzip sudo net-tools neofetch
 
-      # 5. Set root password
-      - name: Set root password
-        run: |
-          echo "root:ChangeThisPassword123" | sudo chpasswd
-
-      # 6. Install Tailscale
+      # 5. Install Tailscale
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      # 7. Start Tailscale with fixed hostname
+      # 6. Start Tailscale with fixed hostname
       - name: Start Tailscale
         run: |
           sudo tailscaled &
           sleep 8
           sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=Nubilux-1 || echo "Tailscale already up"
 
-      # 8. Restart Wings if available
+      # 7. Restart Wings (if exists)
       - name: Restart Wings service
         run: |
           if sudo systemctl list-units --type=service | grep -q wings.service; then
@@ -68,30 +72,23 @@ jobs:
             echo "ℹ️ Wings not installed yet"
           fi
 
-      # 9. Start periodic backups in background
-      - name: Start periodic backups
+      # 8. Keep VPS alive for 6 hours
+      - name: Sleep to keep VPS alive
+        run: sleep 21600
+
+      # 9. Backup VPS before shutdown
+      - name: Backup VPS
         run: |
-          while true; do
-            echo "💾 Saving periodic backup..."
-            sudo tar --exclude=/proc --exclude=/sys --exclude=/dev \
-                     --exclude=/tmp --exclude=/run --exclude=/mnt \
-                     --exclude=/media --exclude=/lost+found \
-                     --numeric-owner -cpzf backup.tar.gz /
-            split -b 2000M backup.tar.gz "backup.tar.gz.part"
-            rm -f backup.tar.gz
-            mkdir -p /tmp/artifacts
-            mv backup.tar.gz.part* /tmp/artifacts/
-            echo "✅ Backup saved at $(date)"
-            sleep 1800 # 30 min
-          done &
+          sudo tar --exclude=/proc --exclude=/sys --exclude=/dev \
+                   --exclude=/tmp --exclude=/run --exclude=/mnt \
+                   --exclude=/media --exclude=/lost+found \
+                   --numeric-owner -cpzf backup.tar.gz /
+          split -b 2000M backup.tar.gz "backup.tar.gz.part"
+          rm -f backup.tar.gz
 
-      # 10. Keep VPS alive for full duration
-      - name: Keep VPS running
-        run: sleep 21000 # ~6 hours
-
-      # 11. Upload last backup before shutdown
-      - name: Upload final VPS backup
+      # 10. Upload backup artifact
+      - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
           name: vps-backup
-          path: /tmp/artifacts
+          path: backup.tar.gz.part*
