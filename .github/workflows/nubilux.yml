@@ -8,7 +8,7 @@ on:
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 350 # Just under 6 hours
 
     steps:
       # 1. Checkout repo
@@ -41,36 +41,38 @@ jobs:
           sudo apt update
           sudo apt install -y curl unzip sudo net-tools neofetch
 
-      # 5. Create user biralo with password biralo (if not exists)
-      - name: Ensure biralo user exists
+      # 5. Create biralo user with sudo rights
+      - name: Create biralo user with sudo
         run: |
-          if ! id "biralo" &>/dev/null; then
+          if ! id -u biralo >/dev/null 2>&1; then
             sudo useradd -m -s /bin/bash biralo
             echo "biralo:biralo" | sudo chpasswd
-            echo "✅ User biralo created"
-          else
-            echo "ℹ️ User biralo already exists"
+            sudo usermod -aG sudo biralo
+            echo "✅ User 'biralo' created with sudo access"
           fi
 
-      # 6. Install Tailscale
+      # 6. Enable root login and set password
+      - name: Enable root login
+        run: |
+          echo "root:root" | sudo chpasswd
+          sudo sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh || sudo systemctl restart sshd
+          echo "✅ Root login enabled with password 'root'"
+
+      # 7. Install Tailscale
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      # 7. Start Tailscale with fixed hostname (skip if identity exists)
+      # 8. Start Tailscale with fixed hostname
       - name: Start Tailscale
         run: |
           sudo tailscaled &
           sleep 8
-          if [ -f /var/lib/tailscale/tailscaled.state ]; then
-            echo "ℹ️ Existing Tailscale identity found, reusing..."
-            sudo tailscale up --hostname=Nubilux-1 --reset
-          else
-            echo "ℹ️ No identity found, logging in with auth key..."
-            sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=Nubilux-1
-          fi
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=nubilux-vps --accept-dns=false --reset
 
-      # 8. Restart Wings (if exists)
+      # 9. Restart Wings (if exists)
       - name: Restart Wings service
         run: |
           if sudo systemctl list-units --type=service | grep -q wings.service; then
@@ -80,11 +82,11 @@ jobs:
             echo "ℹ️ Wings not installed yet"
           fi
 
-      # 9. Keep VPS alive for 6 hours
+      # 10. Keep VPS alive for 6 hours
       - name: Sleep to keep VPS alive
         run: sleep 21600
 
-      # 10. Backup VPS before shutdown
+      # 11. Backup VPS before shutdown
       - name: Backup VPS
         run: |
           sudo tar --exclude=/proc --exclude=/sys --exclude=/dev \
@@ -94,7 +96,7 @@ jobs:
           split -b 2000M backup.tar.gz "backup.tar.gz.part"
           rm -f backup.tar.gz
 
-      # 11. Upload backup artifact
+      # 12. Upload backup artifact
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
